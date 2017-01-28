@@ -1,0 +1,296 @@
+From mike@dimmick.demon.co.uk Sun Apr 29 18:42:56 BST 2001
+Article: 18250 of comp.compilers
+Path: kane.dcs.ed.ac.uk!newsfeed.ed.ac.uk!server6.netnews.ja.net!server1.netnews.ja.net!fu-berlin.de!logbridge.uoregon.edu!newsfeed.stanford.edu!xuxa.iecc.com!nerds-end
+From: "Mike Dimmick" <mike@dimmick.demon.co.uk>
+Newsgroups: comp.compilers,comp.compilers.tools.pccts
+Subject: C++ Grammar - Update
+Date: 26 Apr 2001 21:18:56 -0400
+Organization: Compilers Central
+Lines: 272
+Approved: compilers@iecc.com
+Message-ID: <01-04-141@comp.compilers>
+NNTP-Posting-Host: tom.iecc.com
+X-Trace: xuxa.iecc.com 988334337 5613 208.31.42.38 (27 Apr 2001 01:18:57 GMT)
+X-Complaints-To: abuse@iecc.com
+NNTP-Posting-Date: 27 Apr 2001 01:18:57 GMT
+Keywords: C++, parse
+Posted-Date: 26 Apr 2001 21:18:56 EDT
+X-submission-address: compilers@iecc.com
+X-moderator-address: compilers-request@iecc.com
+X-FAQ-and-archives: http://compilers.iecc.com
+Xref: kane.dcs.ed.ac.uk comp.compilers:18250 comp.compilers.tools.pccts:8155
+
+Some of you are probably aware that I have been trying to develop a
+C++ parser grammar using PCCTS.  One person even e-mailed me to ask if
+he could have a copy!  I also know that a number of others
+periodically ask whether such a beast exists.  Here's how I've been
+getting on.  A quick summary would be: too many ambiguities, too
+little remaining time; abandoned in favour of using Java as the
+language to process. [1]
+
+I started pretty much from scratch, aiming to be LL(1) where possible
+(although this was before I read Terence Parr's paper "LL and LR
+Translators Need k > 1 Lookahead", available at
+http://www.antlr.org/papers/needlook.ps - LL(1) may make the parser a
+little smaller but it _really_ makes things complicated).  I did have
+John Lilley's C++ grammar and hacked PCCTS available for study, but
+couldn't actually understand it.  It's too big to understand in one go
+(not John's fault), and lacks a real overview of exactly how he's
+broken it down into rules.  It doesn't help that he's sorted the rules
+alphabetically as opposed to breaking them down in some logical
+scheme, so far as I can see.  I also didn't want to rely on a tool
+that had no formal documentation accompanying it; PCCTS stock release
+documentation is good, John's was not clear exactly what changes he
+had made.
+
+As I have proceded, I have included semantic predicates for
+resolution where necessary; however, I never actually completed the
+grammar such that ANTLR produced no warnings.  The actual predicate
+functions and symbol table are unimplemented.  Semantic actions
+performing symbol table manipulations have also been omitted.  It is
+therefore unsurprising to say that testing was never performed upon
+this grammar.
+
+C++ is big.  Very big.  The grammar works out (in its incomplete
+state) at 2,528 lines (including comments, token definitions, etc).
+That doesn't include statements - I cut down the grammar to reduce the
+number of reported ambiguities.  It should perform brace matching when
+it hits a function body to steer it correctly to the next declaration.
+This mostly removed the problem of having to handle the well-known
+declaration/expression ambiguities.
+
+The major reported problem with the C++ syntax is that it requires
+semantic information to parse correctly.  This isn't strictly true,
+one can follow the technique of Ed Willink
+(http://www.computing.surrey.ac.uk/research/dsrg/fog/FogThesis.html)
+who uses purely syntactic methods.  However, this technique needs a
+lot of subsequent analysis to correct the misparsed syntax trees, and
+requires backtracking, and also needs some complicated binary-search
+methods to resolve template usage into a consistent AST. [2] I
+therefore decided to stick with the classic method of producing a
+symbol table "on the fly" as it were.
+
+The real problem I encountered was the number of constructs which
+require unlimited lookahead to resolve.  PCCTS provides the syntactic
+predicates to try to resolve these situations, but I had reckoned
+without the requirement to build and traverse the symbol table.  One
+must know whether a construct names a type in order to correctly parse
+in some circumstances.  For example, in a cast-expression, the cast
+notation is similar to that of a parenthesised expression.  If it is a
+type, a following '*' or '&' is part of the type-id (pointer and
+reference respectively); however, if not, it is the equivalent binary
+operator (multiplication, binary AND).  The two require somewhat
+different ASTs.  To determine whether a construct names a type, one
+must inspect the last name in a qualified identifier in the
+appropriate scope, which requires traversing the symbol table.
+
+PCCTS syntactic predicates do not execute actions whilst in guess
+mode.  They do execute init actions, but I could not formulate a
+method which performed all the required traversal solely in init
+actions (this would have been very strange and non-intuitive in any
+case).
+
+Specific ambiguities that were handled:
+
+The template syntax specifies that the first encountered ">" symbol
+inside a template argument list (but not inside a parenthesised
+expression) marks the end of the list, and is not a relational
+operator.  The grammar was not duplicated as for example Willink
+demonstrates; instead a boolean argument to each rule between
+"relational_expression" and "expression" was used to control a
+semantic predicate in relational_expression to treat ">"
+appropriately.  I am not entirely sure that this was the right
+decision - testing may have revealed a problem with this approach.
+
+I had originally thought that there would be conflicts between the
+name of a destructor "~X" and a unary complement expression "~ x".  I
+consulted the standard on this issue and determined that in fact "~X"
+on its own is always considered the complement of X; the destructor
+can only be called through explicit qualification or through one of
+the member access operators.  I therefore had two rules for
+'unqualified-id', one for use after leading qualified names and member
+operators, and another for use without.
+
+Qualified names are another circumstance which require unlimited
+semantic lookahead.  This is due to template names with attached
+argument lists being permitted in a qualified name.  It is necessary
+to resolve the exact instantiation of the template to determine
+whether the contents of the template themselves name a class (in which
+case a following "::" should continue the qualified name).  I believe
+I have previously posted on at least one of these two newsgroups
+regarding the rule in the standard which requires this behaviour; it
+can be summarised as "the members of one instantiation of a template
+need bear no relation to any other instantiation of a template."  This
+leaves us in the ridiculous situation of requiring full template
+instantiation and expression evaluation in order to produce an AST.
+
+C++ name resolution is complicated by the fact that the global
+namespace has no name; it is referred to by prefixing a name
+(qualified or not) with the scope resolution operator "::".  This
+causes more ambiguities resolvable by left-factoring the grammar.
+
+As previously mentioned, resolution of a name between a type-id and an
+expression is necessary in some places (cast, "typeid" clause,
+"sizeof" clause, template argument).  This has been done by
+left-factoring type-id and expression, duplicating _all_ the
+expression rules and removing the left-hand side.  An example (code to
+reattach the left-hand side in the appropriate place has not yet been
+added):
+
+name_inclusive_or_expression [bool inTemplate]:
+        name_exclusive_or_expression [inTemplate]
+            ( BitOr exclusive_or_expression [inTemplate] )*
+    |   ( BitOr exclusive_or_expression [inTemplate] )+
+    ;
+
+"new" expressions also cause some difficulties.  The new-type-id may
+be a parenthesised type-id, which is syntactically similar to a
+new-placement.  This is resolved using the type-id-or-expression rule
+to determine which it was; if a type, we are then expecting a possible
+parenthesised initialiser, if not, the next item must be the type-id,
+followed by a possible initialiser.
+
+The "declaration specifiers" rule (decl-specifiers) has been modified
+to accommodate only one user-defined type or a sequence of built in
+types.  This is slightly complicated by the fact that modifiers may be
+interspersed between the built-in types (e.g. "unsigned const long
+static int") but this removes the problem of whether a name in a
+declaration is the type or the declarator.  This decision was taken
+because the C++ standard has now disallowed implicit 'int' - and
+therefore all declarations must be "type-name declarator-list;".
+
+Function bodies have been treated as a special form of initialiser.
+This is because of the attachment rules for the parameter list of the
+function declarator and the use of redundant parentheses; "func()" is
+considered a declarator in C++.  This causes problems in
+enum_specifier and class_specifier due to the "operator <type-name>"
+conversion declarators which are not required to have an attached
+argument list.  This could probably be resolved by duplicating rules.
+
+Elaborated class and enum specifiers (where the keyword "class",
+"struct", "union" or "enum" qualifies the name of the type itself)
+have been absorbed into the same rule as the equivalent definitions
+(due to their leading context).
+
+This one was the final straw - I realised at this point that I still
+had 21 outstanding warnings and little time to complete the project.
+A declarator is an optional sequence of pointer operators followed by
+possibly qualified identifier.  A pointer-operator may be a
+pointer-to-member operator which has the format:
+
+{"::"} (namespace_name "::")* (class_name "::")+ "*"
+
+and conflicts with the qualified identifier naming the declarator itself.
+
+This is deducible with left-factoring, however, it became clear that
+the repetition was going to cause problems.
+
+Incidentally, the reason that a declarator may be a qualified name is
+to permit the separate initialisation of class statics.  Prior to one
+of the very latest drafts of the standard, this was required; a static
+class member field could not be initialised within the class
+declaration itself.  It was supposed to be declared once only in a
+single translation unit, all others linking to that translation unit.
+This ensures a single copy of the static shared between all instances
+of the class.
+
+Once I have checked the legal position (I have a copyright agreement
+with my University that copyright on any work carried out towards my
+degree is assigned to them; a fait accompli presented when I enrolled)
+I may post my (assuredly incomplete) grammar on a website somewhere,
+should anyone else wishes to study it or make use of it.  I would
+expect that I will place a limited license similar to that for zlib on
+it, if I do so.
+
+There are further ambiguities I haven't detailed here.  These are
+mostly well known, see Willink's thesis (chapter 4 and appendix F) for
+more details, if interested.
+
+To solve the remaining ambiguities, I suggest that at least one of the
+following techniques is employed:
+
+*  Rewriting the code generator such that actions are executed in
+   guess mode; adding support so that erroneously executed actions
+   can be backed out [3].  This inevitably is likely to be prone to
+   error.
+
+*  Manually handling guesses by marking the token buffer, then unmarking
+   in case of success [4] or rewinding the buffer and trying an alternative
+   in case of failure.
+
+*  Further left-factoring of the grammar.
+
+*  Multiple stage parsing.
+
+I conclude that C++ requires some very strong parsing methods if one
+is to be successful.  An LALR(1) grammar is sufficiently strong if
+actions are placed very carefully so as not to interfere with the
+actual parsing method.  My experience of this is minor, but it
+appears, with the tool I have experienced (bison) that any ambiguities
+introduced by doing so are quite difficult to resolve.  The problem
+with the freely available tools is that they require that every use of
+an identifier is translated into a distinct token type depending on
+its semantic meaning (having no equivalent of ANTLR/PCCTS's semantic
+predicates).  YACC++ is said to have these but it costs a fair amount
+of money, which I and my department do not have.  An LL(k) parser,
+with any fixed amount of lookahead, cannot resolve many C++ constructs
+even with semantic information.  Both tools require a great deal of
+manipulation of the grammar which makes it extremely hard to
+understand.
+
+I shall conclude this article by repeating a statement I have made
+before.  I recommend that the syntaxes of C and C++ are no longer
+considered as a basis for developing a new programming language.
+Parsing them for a simple tool (and even for a complex tool) is far
+harder than it should be.
+
+--
+Mike Dimmick
+Final Year Undergraduate, Aston University, Birmingham, UK.
+
+[1] The ultimate project is to produce a tool which processes a source
+program (language to be determined by student, suggested C++ or Java)
+to produce a UML class diagram of the static structure of the program.
+I'm now using ANTLR 2.7.1 with the supplied example Java grammar,
+which is LL(2).  I still hold my prejudices against Java as an actual
+working language; I'm using the version which compiles to C++.  This
+is also because I don't know sufficient Java to use JFC, Swing or the
+AWT; I _do_ know Microsoft Foundation Classes, so I need a parser that
+can link with a C++ program, which I know no way to do with the Java 2
+SDK.  No suggestions please, this needs to be completed by Monday...
+This post is helping me with my documentation, so I'm not skiving.
+
+[2] The problem comes with expressions as template parameters.  C++
+permits full generality of constant expressions, so the use of '<' as
+the less-than operator is permitted.  This leads to trouble with:
+
+a::b<c < d>::e
+
+where correct resolution must be either "a::b is less than c<d>::e" or
+"a::b< (c < d) >::e [is a primary expression]" (assuming one of the
+two is a template).  Willink's method requires that each "Identifier
+LT" combination is processed as a template argument list, backing out
+and retrying as an expression if it could be an expression.  I
+couldn't work out exactly how this worked (the code being interwoven
+between the lexer and parser, in order to force the appropriate
+resolution symbol into YACC's front end) nor how to translate it to
+PCCTS.  I had already put some considerable study into the choice of
+parser generators by this time and considerable time into
+understanding PCCTS properly.
+
+[3] This may be a worthwhile addition to ANTLR and/or PCCTS in any
+case; requiring that all actions are implemented as command objects
+supporting backing out if required with some standard interface.  This
+could easily add true language-independence so long as other minor
+differences (e.g. Java "."  vs. C++ "->" with regard to use of named
+tokens) were in some way removed.
+
+[4] A PCCTS implementation facet.  While there are outstanding marks
+on the buffer, PCCTS cannot garbage-collect tokens from the buffer, as
+token pointers might be needed in a semantic action.  By default,
+because it always rewinds the buffer to do the action pass where
+syntax predicates are involved, it treats a rewind() as unmarking the
+buffer and reducing the mark count.  Adding an unmark facility
+requires subclassing the token buffer class.
+
+
